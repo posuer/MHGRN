@@ -10,6 +10,7 @@ import pickle
 from scipy.sparse import csr_matrix, coo_matrix
 from multiprocessing import Pool
 from .maths import *
+import os
 
 __all__ = ['generate_graph']
 
@@ -122,7 +123,14 @@ def concepts2adj(node_ids):
                     if e_attr['rel'] >= 0 and e_attr['rel'] < n_rel:
                         adj[e_attr['rel']][s][t] = 1
     # cids += 1  # note!!! index 0 is reserved for padding
-    adj = coo_matrix(adj.reshape(-1, n_node))
+    if n_node:
+        adj = coo_matrix(adj.reshape(-1, n_node))
+    else:#Gengyu
+        with open('debug.txt','w') as f:
+            print(n_node, n_rel,file=f)
+        exit()
+        #adj = coo_matrix(np.zeros((n_rel, n_node), dtype=np.uint8))
+
     return adj, cids
 
 
@@ -248,6 +256,68 @@ def concepts_to_adj_matrices_3hop_qa_pair(data):
 #                     functions below this line will be called by preprocess.py                     #
 #####################################################################################################
 
+#Gengyu
+def generate_graph_ckb(pruned_paths_path, kb, cpnet_graph_path, output_path):
+    print(f'generating schema graphs for and {pruned_paths_path}...')
+    if not os.path.isdir('/'.join(output_path.split('/')[:-1])):
+        os.mkdir('/'.join(output_path.split('/')[:-1]))
+    global concept2id, id2concept, relation2id, id2relation
+    if any(x is None for x in [concept2id, id2concept, relation2id, id2relation]):
+        #load_resources(cpnet_vocab_path)
+        concept2id = kb.kb_vocab
+        id2concept = kb.invert_kb_vocab
+        relation2id = kb.relation2id
+        id2relation = kb.id2relation
+
+    global cpnet, cpnet_simple
+    if cpnet is None or cpnet_simple is None:
+        load_cpnet(cpnet_graph_path)
+
+    with open(pruned_paths_path, 'r') as fin_pf, \
+            open(output_path, 'w') as fout:
+        fin_pf_lines = fin_pf.readlines()
+        for line_pf in tqdm(fin_pf_lines, total=len(fin_pf_lines)):
+            #mcp = json.loads(line_gr)
+            qa_pairs = json.loads(line_pf)
+
+            mcp ={"qc":set(), "ac":set()}
+            statement_paths = []
+            statement_rel_list = []
+            for qas in qa_pairs:
+                if qas["pf_res"]:
+                    cur_paths = [item["path"] for item in qas["pf_res"]]
+                    cur_rels = [item["rel"] for item in qas["pf_res"]]
+                else:
+                    cur_paths = []
+                    cur_rels = []
+                    continue
+                statement_paths.extend(cur_paths)
+                statement_rel_list.extend(cur_rels)
+
+                mcp["qc"].add(('conceptnet',qas['qc']))
+                mcp["ac"].add(('conceptnet',qas['ac']))
+                '''
+                try:
+                    concept2id[('conceptnet',qas['qc'])]
+                except:
+                    #print()
+                    print(qas['qc'], qas['ac'])
+                    #print(kb.invert_kb_vocab[cur_paths[0][0]])
+                    for path in cur_paths:
+                        print(kb.invert_kb_vocab[cur_paths[-1]])
+                '''
+            qcs = [concept2id[c] for c in mcp["qc"]]
+            acs = [concept2id[c] for c in mcp["ac"]]
+
+            gobj = plain_graph_generation(qcs=qcs, acs=acs,
+                                          paths=statement_paths,
+                                          rels=statement_rel_list)
+            fout.write(json.dumps(gobj) + '\n')
+
+    print(f'schema graphs saved to {output_path}')
+    print()
+
+
 
 def generate_graph(grounded_path, pruned_paths_path, cpnet_vocab_path, cpnet_graph_path, output_path):
     print(f'generating schema graphs for {grounded_path} and {pruned_paths_path}...')
@@ -316,6 +386,60 @@ def generate_adj_matrices(ori_schema_graph_path, cpnet_graph_path, cpnet_vocab_p
         pickle.dump(res, fout)
 
     print(f'adjacency matrices saved to {output_path}')
+    print()
+
+#Gengyu
+def generate_adj_data_from_grounded_concepts_ckb(pruned_paths_path, cpnet_graph_path, kb, output_path, num_processes):
+    """
+    This function will save
+        (1) adjacency matrics (each in the form of a (R*N, N) coo sparse matrix)
+        (2) concepts ids
+        (3) qmask that specifices whether a node is a question concept
+        (4) amask that specifices whether a node is a answer concept
+    to the output path in python pickle format
+
+    grounded_path: str
+    cpnet_graph_path: str
+    cpnet_vocab_path: str
+    output_path: str
+    num_processes: int
+    """
+    print(f'generating adj data for {pruned_paths_path}...')
+
+    global concept2id, id2concept, relation2id, id2relation, cpnet_simple, cpnet
+    if any(x is None for x in [concept2id, id2concept, relation2id, id2relation]):
+        #load_resources(cpnet_vocab_path)
+        concept2id = kb.kb_vocab
+        id2concept = kb.invert_kb_vocab
+        relation2id = kb.relation2id
+        id2relation = kb.id2relation
+        
+    if cpnet is None or cpnet_simple is None:
+        load_cpnet(cpnet_graph_path)
+
+    qa_data = []
+
+    with open(pruned_paths_path, 'r', encoding='utf-8') as fin_pf:
+        for line_pf in fin_pf:
+            qa_pairs = json.loads(line_pf)
+
+            mcp ={"qc":set(), "ac":set()}
+            for qas in qa_pairs:
+                mcp["qc"].add(('conceptnet',qas['qc']))
+                mcp["ac"].add(('conceptnet',qas['ac']))
+            q_ids = set(concept2id[c] for c in mcp['qc'])
+            a_ids = set(concept2id[c] for c in mcp['ac'])
+            q_ids = q_ids - a_ids
+            qa_data.append((q_ids, a_ids))
+
+    with Pool(num_processes) as p:
+        res = list(tqdm(p.imap(concepts_to_adj_matrices_2hop_all_pair, qa_data), total=len(qa_data)))
+
+    # res is a list of tuples, each tuple consists of four elements (adj, concepts, qmask, amask)
+    with open(output_path, 'wb') as fout:
+        pickle.dump(res, fout)
+
+    print(f'adj data saved to {output_path}')
     print()
 
 

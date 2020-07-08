@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 from utils.tokenization_utils import EXTRA_TOKS
-
+import os
 __all__ = ['glove2npy', 'load_vectors_from_npy_with_vocab', ]
 
 
@@ -62,6 +62,16 @@ def load_vectors_from_npy_with_vocab(glove_npy_path, glove_vocab_path, vocab, ve
     if save_path is None:
         return vectors
     np.save(save_path, vectors)
+
+#Gengyu
+def load_pretrained_embeddings_ckb(glove_npy_path, glove_vocab_path, kb, verbose=True, save_path=None):
+    if not os.path.isdir('/'.join(save_path.split('/')[:-1])):
+        os.mkdir('/'.join(save_path.split('/')[:-1]))
+    vocab = []
+    for key in kb.only_word_dict:
+        vocab.append(key)
+    load_vectors_from_npy_with_vocab(glove_npy_path=glove_npy_path, glove_vocab_path=glove_vocab_path, vocab=vocab, verbose=verbose, save_path=save_path)
+
 
 
 def load_pretrained_embeddings(glove_npy_path, glove_vocab_path, vocab_path, verbose=True, save_path=None):

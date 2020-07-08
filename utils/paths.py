@@ -357,12 +357,26 @@ def score_paths(raw_paths_path, concept_emb_path, rel_emb_path, cpnet_vocab_path
         raise NotImplementedError()
 
     all_scores = []
-    with open(raw_paths_path, 'r') as fin:
-        data = [json.loads(line) for line in fin]
-
-    with Pool(num_processes) as p, open(output_path, 'w') as fout:
-        for statement_scores in tqdm(p.imap(score_qa_pairs, data), total=len(data)):
-            fout.write(json.dumps(statement_scores) + '\n')
+    if raw_paths_path.split('/')[-1].startswith("train") and raw_paths_path.split('/')[2]=='socialiqa':
+        split_path = '/'.join(raw_paths_path.split('/')[:-1])+'/train.paths.raw.split'
+        split_path_output = '/'.join(raw_paths_path.split('/')[:-1])+'/train.paths.scores.split'
+        if not os.path.isdir(split_path_output): os.mkdir(split_path_output)
+        for filename in os.listdir(split_path):
+            print("\nprocessing", filename)
+            with open(os.path.join(split_path, filename) , 'r') as fin:
+                data = [json.loads(line) for line in fin]
+            output_path_split = output_path.split('/')[-1]+"."+filename.split('.')[-1]
+            with Pool(num_processes) as p, open(os.path.join(split_path_output, output_path_split ), 'w') as fout:
+                for statement_scores in tqdm(p.imap(score_qa_pairs, data), total=len(data)):
+                    fout.write(json.dumps(statement_scores) + '\n')
+            del data
+    else:
+        with open(raw_paths_path, 'r') as fin:
+            data = [json.loads(line) for line in fin]
+        
+        with Pool(num_processes) as p, open(output_path, 'w') as fout:
+            for statement_scores in tqdm(p.imap(score_qa_pairs, data), total=len(data)):
+                fout.write(json.dumps(statement_scores) + '\n')
 
     print(f'path scores saved to {output_path}')
     print()
@@ -372,22 +386,55 @@ def prune_paths(raw_paths_path, path_scores_path, output_path, threshold, verbos
     print(f'pruning paths for {raw_paths_path}...')
     ori_len = 0
     pruned_len = 0
-    nrow = sum(1 for _ in open(raw_paths_path, 'r'))
-    with open(raw_paths_path, 'r') as fin_raw, \
-            open(path_scores_path, 'r') as fin_score, \
-            open(output_path, 'w') as fout:
-        for line_raw, line_score in tqdm(zip(fin_raw, fin_score), total=nrow):
-            qa_pairs = json.loads(line_raw)
-            qa_pairs_scores = json.loads(line_score)
-            for qas, qas_scores in zip(qa_pairs, qa_pairs_scores):
-                ori_paths = qas['pf_res']
-                if ori_paths is not None:
-                    pruned_paths = [p for p, s in zip(ori_paths, qas_scores) if s >= threshold]
-                    ori_len += len(ori_paths)
-                    pruned_len += len(pruned_paths)
-                    assert len(ori_paths) >= len(pruned_paths)
-                    qas['pf_res'] = pruned_paths
-            fout.write(json.dumps(qa_pairs) + '\n')
+    if raw_paths_path.split('/')[-1].startswith("train") and raw_paths_path.split('/')[2]=='socialiqa':
+
+        raw_split_dir = '/'.join(raw_paths_path.split('/')[:-1])+'/train.paths.raw.split'
+        socres_split_dir = '/'.join(raw_paths_path.split('/')[:-1])+'/train.paths.scores.split'
+        #output_split_dir = '/'.join(raw_paths_path.split('/')[:-1])+'/train.paths.pruned.split'
+        #if not os.path.isdir(output_split_dir): os.mkdir(output_split_dir)
+        
+        fout = open(output_path, 'w')
+
+        for raw_filename in os.listdir(raw_split_dir):
+            raw_paths_path = os.path.join(raw_split_dir, raw_filename)
+            path_scores_path = os.path.join(socres_split_dir, raw_filename.replace('raw','scores'))
+            #output_path = os.path.join(output_split_dir, raw_filename.replace('raw','pruned'))
+            
+            nrow = sum(1 for _ in open(raw_paths_path, 'r'))
+            with open(raw_paths_path, 'r') as fin_raw, \
+                    open(path_scores_path, 'r') as fin_score:
+                    #open(output_path, 'w') as fout:
+                for line_raw, line_score in tqdm(zip(fin_raw, fin_score), total=nrow):
+                    qa_pairs = json.loads(line_raw)
+                    qa_pairs_scores = json.loads(line_score)
+                    for qas, qas_scores in zip(qa_pairs, qa_pairs_scores):
+                        ori_paths = qas['pf_res']
+                        if ori_paths is not None:
+                            pruned_paths = [p for p, s in zip(ori_paths, qas_scores) if s >= threshold]
+                            ori_len += len(ori_paths)
+                            pruned_len += len(pruned_paths)
+                            assert len(ori_paths) >= len(pruned_paths)
+                            qas['pf_res'] = pruned_paths
+                    fout.write(json.dumps(qa_pairs) + '\n')
+        
+        fout.close()
+    else:
+        nrow = sum(1 for _ in open(raw_paths_path, 'r'))
+        with open(raw_paths_path, 'r') as fin_raw, \
+                open(path_scores_path, 'r') as fin_score, \
+                open(output_path, 'w') as fout:
+            for line_raw, line_score in tqdm(zip(fin_raw, fin_score), total=nrow):
+                qa_pairs = json.loads(line_raw)
+                qa_pairs_scores = json.loads(line_score)
+                for qas, qas_scores in zip(qa_pairs, qa_pairs_scores):
+                    ori_paths = qas['pf_res']
+                    if ori_paths is not None:
+                        pruned_paths = [p for p, s in zip(ori_paths, qas_scores) if s >= threshold]
+                        ori_len += len(ori_paths)
+                        pruned_len += len(pruned_paths)
+                        assert len(ori_paths) >= len(pruned_paths)
+                        qas['pf_res'] = pruned_paths
+                fout.write(json.dumps(qa_pairs) + '\n')
 
     if verbose:
         print("ori_len: {}   pruned_len: {}   keep_rate: {:.4f}".format(ori_len, pruned_len, pruned_len / ori_len))

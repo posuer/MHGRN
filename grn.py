@@ -1,13 +1,18 @@
 import random
+import logging
 
 from modeling.modeling_grn import *
 from utils.optimization_utils import *
 from utils.parser_utils import *
 from utils.relpath_utils import *
 
+logging.basicConfig(filename='grn_run.log',level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 DECODER_DEFAULT_LR = {
     'csqa': 1e-3,
     'obqa': 3e-4,
+    'socialiqa': 1e-3,
 }
 
 
@@ -100,7 +105,7 @@ def main():
 
 
 def train(args):
-    print(args)
+    logger.info(args)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -120,7 +125,7 @@ def train(args):
     #   Load data                                                                                     #
     ###################################################################################################
     if 'lm' in args.ent_emb:
-        print('Using contextualized embeddings for concepts')
+        logger.info('Using contextualized embeddings for concepts')
         use_contextualized = True
     else:
         use_contextualized = False
@@ -128,7 +133,7 @@ def train(args):
     cp_emb = torch.tensor(np.concatenate(cp_emb, 1), dtype=torch.float)
 
     concept_num, concept_dim = cp_emb.size(0), cp_emb.size(1)
-    print('| num_concepts: {} |'.format(concept_num))
+    logger.info('| num_concepts: {} |'.format(concept_num))
 
     try:
         device = torch.device("cuda:0" if torch.cuda.is_available() and args.cuda else "cpu")
@@ -160,10 +165,10 @@ def train(args):
                                    do_init_rn=args.init_rn, do_init_identity=args.init_identity, encoder_config=lstm_config)
         model.to(device)
     except RuntimeError as e:
-        print(e)
-        print('best dev acc: 0.0 (at epoch 0)')
-        print('final test acc: 0.0')
-        print()
+        logger.info(e)
+        logger.info('best dev acc: 0.0 (at epoch 0)')
+        logger.info('final test acc: 0.0')
+        logger.info(' ')
         return
 
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
@@ -185,14 +190,14 @@ def train(args):
         max_steps = int(args.n_epochs * (dataset.train_size() / args.batch_size))
         scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=max_steps)
 
-    print('parameters:')
+    logger.info('parameters:')
     for name, param in model.decoder.named_parameters():
         if param.requires_grad:
-            print('\t{:45}\ttrainable\t{}'.format(name, param.size()))
+            logger.info('\t{:45}\ttrainable\t{}'.format(name, param.size()))
         else:
-            print('\t{:45}\tfixed\t{}'.format(name, param.size()))
+            logger.info('\t{:45}\tfixed\t{}'.format(name, param.size()))
     num_params = sum(p.numel() for p in model.decoder.parameters() if p.requires_grad)
-    print('\ttotal:', num_params)
+    logger.info('\ttotal:', num_params)
 
     if args.loss == 'margin_rank':
         loss_func = nn.MarginRankingLoss(margin=0.1, reduction='mean')
@@ -203,8 +208,8 @@ def train(args):
     #   Training                                                                                      #
     ###################################################################################################
 
-    print()
-    print('-' * 71)
+    logger.info(' ')
+    logger.info('-' * 71)
     global_step, best_dev_epoch = 0, 0
     best_dev_acc, final_test_acc, total_loss = 0.0, 0.0, 0.0
     start_time = time.time()
@@ -245,7 +250,7 @@ def train(args):
                 if (global_step + 1) % args.log_interval == 0:
                     total_loss /= args.log_interval
                     ms_per_batch = 1000 * (time.time() - start_time) / args.log_interval
-                    print('| step {:5} |  lr: {:9.7f} | loss {:7.4f} | ms/batch {:7.2f} |'.format(global_step, scheduler.get_lr()[0], total_loss, ms_per_batch))
+                    logger.info('| step {:5} |  lr: {:9.7f} | loss {:7.4f} | ms/batch {:7.2f} |'.format(global_step, scheduler.get_lr()[0], total_loss, ms_per_batch))
                     total_loss = 0
                     start_time = time.time()
                 global_step += 1
@@ -253,9 +258,9 @@ def train(args):
             model.eval()
             dev_acc = evaluate_accuracy(dataset.dev(), model)
             test_acc = evaluate_accuracy(dataset.test(), model) if args.test_statements else 0.0
-            print('-' * 71)
-            print('| step {:5} | dev_acc {:7.4f} | test_acc {:7.4f} |'.format(global_step, dev_acc, test_acc))
-            print('-' * 71)
+            logger.info('-' * 71)
+            logger.info('| step {:5} | dev_acc {:7.4f} | test_acc {:7.4f} |'.format(global_step, dev_acc, test_acc))
+            logger.info('-' * 71)
             with open(log_path, 'a') as fout:
                 fout.write('{},{},{}\n'.format(global_step, dev_acc, test_acc))
             if dev_acc >= best_dev_acc:
@@ -263,19 +268,19 @@ def train(args):
                 final_test_acc = test_acc
                 best_dev_epoch = epoch_id
                 torch.save([model, args], model_path)
-                print(f'model saved to {model_path}')
+                logger.info(f'model saved to {model_path}')
             model.train()
             start_time = time.time()
             if epoch_id > args.unfreeze_epoch and epoch_id - best_dev_epoch >= args.max_epochs_before_stop:
                 break
     except (KeyboardInterrupt, RuntimeError) as e:
-        print(e)
+        logger.info(e)
 
-    print()
-    print('training ends in {} steps'.format(global_step))
-    print('best dev acc: {:.4f} (at epoch {})'.format(best_dev_acc, best_dev_epoch))
-    print('final test acc: {:.4f}'.format(final_test_acc))
-    print()
+    logger.info(' ')
+    logger.info('training ends in {} steps'.format(global_step))
+    logger.info('best dev acc: {:.4f} (at epoch {})'.format(best_dev_acc, best_dev_epoch))
+    logger.info('final test acc: {:.4f}'.format(final_test_acc))
+    logger.info(' ')
 
 
 def eval(args):
@@ -296,14 +301,14 @@ def eval(args):
                                            train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs, test_embs_path=old_args.test_embs,
                                            subsample=old_args.subsample, format=old_args.format)
 
-    print()
-    print("***** runing evaluation *****")
-    print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
+    logger.info(' ')
+    logger.info("***** runing evaluation *****")
+    logger.info(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
     dev_acc = evaluate_accuracy(dataset.dev(), model)
     test_acc = evaluate_accuracy(dataset.test(), model) if dataset.test_size() else 0.0
-    print("***** evaluation done *****")
-    print()
-    print(f'| dev_accuracy: {dev_acc} | test_acc: {test_acc} |')
+    logger.info("***** evaluation done *****")
+    logger.info(' ')
+    logger.info(f'| dev_accuracy: {dev_acc} | test_acc: {test_acc} |')
 
 
 def pred(args):
@@ -327,9 +332,9 @@ def pred(args):
                                            train_embs_path=old_args.train_embs, dev_embs_path=old_args.dev_embs, test_embs_path=old_args.test_embs,
                                            subsample=old_args.subsample, format=old_args.format)
 
-    print()
-    print("***** generating model predictions *****")
-    print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
+    logger.info(' ')
+    logger.info("***** generating model predictions *****")
+    logger.info(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
 
     for output_path, data_loader in [(dev_pred_path, dataset.dev())] + ([(test_pred_path, dataset.test())] if dataset.test_size() > 0 else []):
         with torch.no_grad(), open(output_path, 'w') as fout:
@@ -337,10 +342,10 @@ def pred(args):
                 logits, _ = model(*input_data)
                 for qid, pred_label in zip(qids, logits.argmax(1)):
                     fout.write('{},{}\n'.format(qid, chr(ord('A') + pred_label.item())))
-        print(f'predictions saved to {output_path}')
+        logger.info(f'predictions saved to {output_path}')
 
-    print("***** prediction done *****")
-    print()
+    logger.info("***** prediction done *****")
+    logger.info(' ')
 
 
 def decode(args):
@@ -382,9 +387,9 @@ def decode(args):
                     res.append('---[{}]--->'.format(merged_relations[rid - len(merged_relations)]))
         return ' '.join(res)
 
-    print()
-    print("***** decoding *****")
-    print(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
+    logger.info(' ')
+    logger.info("***** decoding *****")
+    logger.info(f'| dataset: {old_args.dataset} | num_dev: {dataset.dev_size()} | num_test: {dataset.test_size()} | save_dir: {args.save_dir} |')
     model.eval()
     for eval_set, filename in zip([dataset.dev(), dataset.test()], ['decode_dev.txt', 'decode_test.txt']):
         outputs = []
@@ -409,9 +414,9 @@ def decode(args):
         with open(output_path, 'w') as fout:
             for line in outputs:
                 fout.write(line + '\n')
-        print(f'outputs saved to {output_path}')
-    print("***** done *****")
-    print()
+        logger.info(f'outputs saved to {output_path}')
+    logger.info("***** done *****")
+    logger.info(' ')
 
 
 if __name__ == '__main__':

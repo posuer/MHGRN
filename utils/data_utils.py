@@ -2,7 +2,7 @@ import dgl
 import numpy as np
 import pickle
 import torch
-from transformers import (OpenAIGPTTokenizer, BertTokenizer, XLNetTokenizer, RobertaTokenizer, AlbertTokenizer)
+from transformers import (OpenAIGPTTokenizer, BertTokenizer, XLNetTokenizer, RobertaTokenizer,)#gengyu-  AlbertTokenizer)
 
 from utils.tokenization_utils import *
 
@@ -679,7 +679,7 @@ def load_bert_xlnet_roberta_input_tensors(statement_jsonl_path, model_type, mode
         return all_input_ids, all_input_mask, all_segment_ids, all_output_mask, all_label
 
     tokenizer_class = {'bert': BertTokenizer, 'xlnet': XLNetTokenizer,
-                       'roberta': RobertaTokenizer, 'albert': AlbertTokenizer}.get(model_type)
+                       'roberta': RobertaTokenizer, }.get(model_type) #gengyu- 'albert': AlbertTokenizer
     tokenizer = tokenizer_class.from_pretrained(model_name)
     examples = read_examples(statement_jsonl_path)
 

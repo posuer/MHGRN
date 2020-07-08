@@ -18,6 +18,15 @@ ENCODER_DEFAULT_LR = {
         'roberta-large': 1e-5,
         'albert-xxlarge-v2': 1e-5,
         'aristo-roberta-large': 1e-5,
+    },
+    'socialiqa': {
+        'lstm': 3e-4,
+        'openai-gpt': 3e-5,
+        'bert-base-cased': 1e-4,
+        'bert-large-cased': 1e-4,
+        'roberta-large': 1e-5,
+        'albert-xxlarge-v2': 1e-5,
+        'aristo-roberta-large': 1e-5,
     }
 }
 
@@ -29,7 +38,7 @@ DATASET_SETTING = {
     'socialiqa': 'official',
 }
 
-DATASET_NO_TEST = ['socialiqa']
+DATASET_NO_TEST = []#['socialiqa']
 
 EMB_PATHS = {
     'transe': './data/transe/glove.transe.sgd.ent.npy',

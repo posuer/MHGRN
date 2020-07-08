@@ -19,4 +19,4 @@ max_cpt_num = {
 }
 
 
-dataset_no_test = ['socialiqa']
+dataset_no_test = []#['socialiqa']
