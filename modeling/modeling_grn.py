@@ -719,6 +719,7 @@ class LMGraphRelationNetDataLoader(object):
         self.device0, self.device1 = device
         self.is_inhouse = is_inhouse
         self.use_contextualized = use_contextualized
+        self.max_node_num = max_node_num
 
         model_type = MODEL_NAME_TO_CLASS[model_name]
         self.train_qids, self.train_labels, *self.train_encoder_data = load_input_tensors(train_statement_path, model_type, model_name, max_seq_length, format=format)
@@ -727,8 +728,8 @@ class LMGraphRelationNetDataLoader(object):
         num_choice = self.train_encoder_data[0].size(1)
         *self.train_decoder_data, self.train_adj_data, n_rel = load_adj_data(train_adj_path, max_node_num, num_choice, emb_pk_path=train_embs_path if use_contextualized else None)
         *self.dev_decoder_data, self.dev_adj_data, n_rel = load_adj_data(dev_adj_path, max_node_num, num_choice, emb_pk_path=dev_embs_path if use_contextualized else None)
-        assert all(len(self.train_qids) == len(self.train_adj_data) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
-        assert all(len(self.dev_qids) == len(self.dev_adj_data) == x.size(0) for x in [self.dev_labels] + self.dev_encoder_data + self.dev_decoder_data)
+        assert all(len(self.train_qids) == len(self.train_adj_data) == len(x) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data) #.size(0)
+        assert all(len(self.dev_qids) == len(self.dev_adj_data) == len(x) for x in [self.dev_labels] + self.dev_encoder_data + self.dev_decoder_data) #.size(0)
 
         # pre-allocate an empty batch adj matrix
         self.adj_empty = torch.zeros((self.batch_size, num_choice, n_rel - 1, max_node_num, max_node_num), dtype=torch.float32)
@@ -760,8 +761,8 @@ class LMGraphRelationNetDataLoader(object):
                 assert all(len(self.train_qids) == len(self.train_adj_data) == x.size(0) for x in [self.train_labels] + self.train_encoder_data + self.train_decoder_data)
             assert self.train_size() == n_train
 
-    def get_node_feature_dim(self):
-        return self.train_decoder_data[-1].size(-1) if self.use_contextualized else None
+    def get_node_feature_dim(self):#Gengyu: train_decoder_data[-1] is not tensor but a list
+        return self.train_decoder_data[-1][0][0].size(-1) if self.use_contextualized else None
 
     def train_size(self):
         return self.inhouse_train_indexes.size(0) if self.is_inhouse else len(self.train_qids)
@@ -781,23 +782,23 @@ class LMGraphRelationNetDataLoader(object):
             train_indexes = self.inhouse_train_indexes[torch.randperm(n_train)]
         else:
             train_indexes = torch.randperm(len(self.train_qids))
-        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.batch_size, train_indexes, self.train_qids, self.train_labels,
+        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.batch_size, train_indexes, self.train_qids, self.train_labels, self.max_node_num,
                                              tensors0=self.train_encoder_data, tensors1=self.train_decoder_data, adj_empty=self.adj_empty, adj_data=self.train_adj_data)
 
     def train_eval(self):
-        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.train_qids)), self.train_qids, self.train_labels,
+        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.train_qids)), self.train_qids, self.train_labels, self.max_node_num,
                                              tensors0=self.train_encoder_data, tensors1=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.train_adj_data)
 
     def dev(self):
-        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.dev_qids)), self.dev_qids, self.dev_labels,
+        return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.dev_qids)), self.dev_qids, self.dev_labels, self.max_node_num,
                                              tensors0=self.dev_encoder_data, tensors1=self.dev_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.dev_adj_data)
 
     def test(self):
         if self.is_inhouse:
-            return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, self.inhouse_test_indexes, self.train_qids, self.train_labels,
+            return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, self.inhouse_test_indexes, self.train_qids, self.train_labels, self.max_node_num,
                                                  tensors0=self.train_encoder_data, tensors1=self.train_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.train_adj_data)
         else:
-            return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.test_qids)), self.test_qids, self.test_labels,
+            return MultiGPUAdjDataBatchGenerator(self.device0, self.device1, self.eval_batch_size, torch.arange(len(self.test_qids)), self.test_qids, self.test_labels, self.max_node_num,
                                                  tensors0=self.test_encoder_data, tensors1=self.test_decoder_data, adj_empty=self.eval_adj_empty, adj_data=self.test_adj_data)
 
 

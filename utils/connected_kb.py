@@ -6,7 +6,61 @@ import networkx as nx
 from tqdm import tqdm
 from nltk.stem import WordNetLemmatizer 
 
-from utils.conceptnet import load_merge_relation, merged_relations
+# from utils.conceptnet import load_merge_relation, merged_relations
+
+relation_groups = [
+    'atlocation/locatednear',
+    'capableof',
+    'causes/causesdesire/*motivatedbygoal',
+    'createdby',
+    'desires',
+    #'antonym/distinctfrom',
+    #'hascontext',
+    'hasproperty',
+    'hassubevent/hasfirstsubevent/haslastsubevent/hasprerequisite/entails/mannerof',
+    'isa/instanceof/definedas',
+    'madeof',
+    'notcapableof',
+    'notdesires',
+    'partof/*hasa',
+    #'relatedto/similarto/synonym',
+    'usedfor',
+    'receivesaction',
+]
+
+merged_relations = [
+    #'antonym',
+    'atlocation',
+    'capableof',
+    'causes',
+    'createdby',
+    'isa',
+    'desires',
+    'hassubevent',
+    'partof',
+    #'hascontext',
+    'hasproperty',
+    'madeof',
+    'notcapableof',
+    'notdesires',
+    'receivesaction',
+    #'relatedto',
+    'usedfor',
+]
+
+# discard: ["relatedto", "synonym", "antonym", hasContext, "derivedfrom", "formof", "etymologicallyderivedfrom", "etymologicallyrelatedto", "externalurl"] 
+def load_merge_relation():
+    relation_mapping = dict()
+    for line in relation_groups:
+        ls = line.strip().split('/')
+        rel = ls[0]
+        for l in ls:
+            if l.startswith("*"):
+                relation_mapping[l[1:]] = "*" + rel
+            else:
+                relation_mapping[l] = rel
+    return relation_mapping
+
 
 '''
 path hop structure
@@ -86,7 +140,7 @@ class Connected_KB(object):
         for key in all_rels:
             #if key not in relation2id:
             relation2id[key] = len(relation2id)
-            relation2id['*'+key] = len(all_rels) + len(relation2id)
+            #relation2id['*'+key] = len(all_rels) + len(relation2id)
         id2relation = {r: i for i, r in relation2id.items()}
 
         return relation2id, id2relation
@@ -253,62 +307,71 @@ class Connected_KB(object):
         def add_to_graph(head, rel, tail, direction = 0):
             if rel not in self.rel_grouping:
                 return
-            rel_id = self.relation2id[self.rel_grouping[rel]]
-            rel_id_invert = self.relation2id[self.rel_grouping[rel][1:] if self.rel_grouping[rel].startswith('*') else "*"+self.rel_grouping[rel] ]
+            if self.rel_grouping[rel].startswith('*'):
+                rel_id = self.relation2id[self.rel_grouping[rel][1:]] + len(self.relation2id)
+                rel_id_invert = self.relation2id[self.rel_grouping[rel][1:]]
+            else:
+                rel_id = self.relation2id[self.rel_grouping[rel]]
+                rel_id_invert = self.relation2id[self.rel_grouping[rel]] + len(self.relation2id)
+            
             subj = self.kb_vocab[head]
             obj = self.kb_vocab[tail]
             if (rel_id, subj, obj) in triple_set or subj == obj:
                 return
             else:
-                triple_set.add((rel_id, subj, obj))
-                triple_set.add((rel_id, obj, subj))
                 if direction == 0:
+                    triple_set.add((rel_id, subj, obj))
+                    triple_set.add((rel_id_invert, obj, subj))
+
                     self.G.add_edge(subj, obj, rel=rel_id)
                     self.G.add_edge(obj, subj, rel=rel_id_invert)
                 elif direction == 1:
+                    triple_set.add((rel_id_invert, subj, obj))
+                    triple_set.add((rel_id, obj, subj))
+
                     self.G.add_edge(subj, obj, rel=rel_id_invert)
                     self.G.add_edge(obj, subj, rel=rel_id)
 
-        if os.path.exists(output_graph_dir):
-            self.G = pickle.load(open(output_graph_dir, "rb" ) )
-        else:
-            for head, cn_event_infer in tqdm(self.ConceptNet.items(),desc="Add ConceptNet to graph"):
-                for tail_type, tail_list in cn_event_infer.items():
-                    if tail_type == "conceptnet":
-                        for tail in tail_list:
-                            add_to_graph(('conceptnet',head), tail['rel'], ('conceptnet',tail['tail']), tail['direction'])
-                    elif tail_type == "atomic_event":
-                        for tail in tail_list:
-                            add_to_graph(('conceptnet',head), 'cn_atomic', ('atomic_event',tail))
-                    elif tail_type == "atomic_infer":
-                        for tail in tail_list:
-                            add_to_graph(('conceptnet',head), 'cn_atomic', ('atomic_infer',tail))
-            
-            for head, cn_event_infer in tqdm(self.ATOMIC_Events.items(),desc="Add ATOMIC Events to graph"):
-                for tail_type, tail_list in cn_event_infer.items():
-                    if tail_type == "conceptnet":
-                        for tail in tail_list:
-                            add_to_graph(('atomic_event',head), 'cn_atomic', ('conceptnet',tail), 1)
-                    elif tail_type == "atomic_infer":
-                        for rel, tails in tail_list.items():
-                            if rel != 'prefix':
-                                for tail in tails:
-                                    add_to_graph(('atomic_event',head), rel, ('atomic_infer',tail))
-
-            for head, cn_event_infer in tqdm(self.ATOMIC_Infers.items(),desc="Add ATOMIC Infers to graph"):
-                for tail_type, tail_list in cn_event_infer.items():
-                    if tail_type == "conceptnet":
-                        for tail in tail_list:
-                            add_to_graph(('atomic_infer',head), 'cn_atomic', ('conceptnet',tail), 1)
-                    elif tail_type == "atomic_event":
-                        for tail in tail_list:
-                            add_to_graph(('atomic_infer',head), tail['rel'], ('atomic_event',tail['tail']), 1)
-
-            pickle.dump(self.G, open( output_graph_dir, "wb" ) )
-
-            print(f"networkx graph file saved to {output_graph_dir}")
-            print()
+        #if os.path.exists(output_graph_dir):
+        #    self.G = pickle.load(open(output_graph_dir, "rb" ) )
+        #else:
+        for head, cn_event_infer in tqdm(self.ConceptNet.items(),desc="Add ConceptNet to graph"):
+            for tail_type, tail_list in cn_event_infer.items():
+                if tail_type == "conceptnet":
+                    for tail in tail_list:
+                        add_to_graph(('conceptnet',head), tail['rel'], ('conceptnet',tail['tail']), tail['direction'])
+                elif tail_type == "atomic_event":
+                    for tail in tail_list:
+                        add_to_graph(('conceptnet',head), 'cn_atomic', ('atomic_event',tail))
+                elif tail_type == "atomic_infer":
+                    for tail in tail_list:
+                        add_to_graph(('conceptnet',head), 'cn_atomic', ('atomic_infer',tail))
         
+        for head, cn_event_infer in tqdm(self.ATOMIC_Events.items(),desc="Add ATOMIC Events to graph"):
+            for tail_type, tail_list in cn_event_infer.items():
+                if tail_type == "conceptnet":
+                    for tail in tail_list:
+                        add_to_graph(('atomic_event',head), 'cn_atomic', ('conceptnet',tail), 1)
+                elif tail_type == "atomic_infer":
+                    for rel, tails in tail_list.items():
+                        if rel != 'prefix':
+                            for tail in tails:
+                                add_to_graph(('atomic_event',head), rel, ('atomic_infer',tail))
+
+        for head, cn_event_infer in tqdm(self.ATOMIC_Infers.items(),desc="Add ATOMIC Infers to graph"):
+            for tail_type, tail_list in cn_event_infer.items():
+                if tail_type == "conceptnet":
+                    for tail in tail_list:
+                        add_to_graph(('atomic_infer',head), 'cn_atomic', ('conceptnet',tail), 1)
+                elif tail_type == "atomic_event":
+                    for tail in tail_list:
+                        add_to_graph(('atomic_infer',head), tail['rel'], ('atomic_event',tail['tail']), 1)
+
+        pickle.dump(self.G, open( output_graph_dir, "wb" ) )
+
+        print(f"networkx graph file saved to {output_graph_dir}")
+        print()
+    
 
     def kb_load(self):
         if os.path.exists(self.data_dir+"ConceptNet_en_QA.pickle") and os.path.exists(self.data_dir+"ATOMIC_v4_Events.pickle") and os.path.exists(self.data_dir+"ATOMIC_v4_Infers.pickle"):# and os.path.exists("ATOMIC_ConceptNet_wholeGraph.pickle"):

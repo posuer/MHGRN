@@ -5,12 +5,14 @@ import json
 from tqdm import tqdm
 from .conceptnet import merged_relations
 import numpy as np
+import random
 from scipy import sparse
 import pickle
 from scipy.sparse import csr_matrix, coo_matrix
 from multiprocessing import Pool
 from .maths import *
 import os
+from utils.utils import check_path
 
 __all__ = ['generate_graph']
 
@@ -35,16 +37,19 @@ def load_resources(cpnet_vocab_path):
     relation2id = {r: i for i, r in enumerate(id2relation)}
 
 
-def load_cpnet(cpnet_graph_path):
+def load_cpnet(cpnet_graph_path = None, cpnet_simple_graph_path = None):
     global cpnet, cpnet_simple
     cpnet = nx.read_gpickle(cpnet_graph_path)
     cpnet_simple = nx.Graph()
-    for u, v, data in cpnet.edges(data=True):
+    for u, v, data in cpnet.edges(data=True): #remove relations from graph
         w = data['weight'] if 'weight' in data else 1.0
         if cpnet_simple.has_edge(u, v):
             cpnet_simple[u][v]['weight'] += w
         else:
             cpnet_simple.add_edge(u, v, weight=w)
+    if cpnet_simple_graph_path:
+        pickle.dump(cpnet_simple, open(cpnet_simple_graph_path,'wb'))
+
 
 
 def relational_graph_generation(qcs, acs, paths, rels):
@@ -56,6 +61,7 @@ def plain_graph_generation(qcs, acs, paths, rels):
     global cpnet, concept2id, relation2id, id2relation, id2concept, cpnet_simple
 
     graph = nx.Graph()
+    
     for p in paths:
         for c_index in range(len(p) - 1):
             h = p[c_index]
@@ -63,7 +69,7 @@ def plain_graph_generation(qcs, acs, paths, rels):
             # TODO: the weight can computed by concept embeddings and relation embeddings of TransE
             graph.add_edge(h, t, weight=1.0)
 
-    for qc1, qc2 in list(itertools.combinations(qcs, 2)):
+    for qc1, qc2 in list(itertools.combinations(qcs, 2)): # gengyu: all head linked together? then 
         if cpnet_simple.has_edge(qc1, qc2):
             graph.add_edge(qc1, qc2, weight=1.0)
 
@@ -111,25 +117,19 @@ def generate_adj_matrix_per_inst(nxg_str):
 
 def concepts2adj(node_ids):
     global id2relation
-    cids = np.array(node_ids, dtype=np.int32)
-    n_rel = len(id2relation)
-    n_node = cids.shape[0]
-    adj = np.zeros((n_rel, n_node, n_node), dtype=np.uint8)
+    cids = np.array(node_ids, dtype=np.int32) #list to numpy
+    n_rel = len(id2relation) # number of relations
+    n_node = cids.shape[0] #number of nodes
+    adj = np.zeros((n_rel, n_node, n_node), dtype=np.uint8) #adj with 3-d matrix: #rel, #node, #node
     for s in range(n_node):
-        for t in range(n_node):
-            s_c, t_c = cids[s], cids[t]
-            if cpnet.has_edge(s_c, t_c):
-                for e_attr in cpnet[s_c][t_c].values():
+        for t in range(n_node): #for every two node pair
+            s_c, t_c = cids[s], cids[t] #get node id
+            if cpnet.has_edge(s_c, t_c): 
+                for e_attr in cpnet[s_c][t_c].values(): 
                     if e_attr['rel'] >= 0 and e_attr['rel'] < n_rel:
                         adj[e_attr['rel']][s][t] = 1
     # cids += 1  # note!!! index 0 is reserved for padding
-    if n_node:
-        adj = coo_matrix(adj.reshape(-1, n_node))
-    else:#Gengyu
-        with open('debug.txt','w') as f:
-            print(n_node, n_rel,file=f)
-        exit()
-        #adj = coo_matrix(np.zeros((n_rel, n_node), dtype=np.uint8))
+    adj = coo_matrix(adj.reshape(-1, n_node))
 
     return adj, cids
 
@@ -187,13 +187,30 @@ def concepts_to_adj_matrices_2hop_qa_pair(data):
 
 
 def concepts_to_adj_matrices_2hop_all_pair(data):
+
     qc_ids, ac_ids = data
+
     qa_nodes = set(qc_ids) | set(ac_ids)
-    extra_nodes = set()
+    extra_nodes = []
     for qid in qa_nodes:
         for aid in qa_nodes:
             if qid != aid and qid in cpnet_simple.nodes and aid in cpnet_simple.nodes:
-                extra_nodes |= set(cpnet_simple[qid]) & set(cpnet_simple[aid])
+                extra_nodes.extend(list(set(cpnet_simple[qid]) & set(cpnet_simple[aid]))) # find all 2 hop paths, extra_nodes are middile nodes 
+    extra_nodes = set(extra_nodes)
+    extra_nodes = extra_nodes - qa_nodes
+    schema_graph = sorted(qc_ids) + sorted(ac_ids) + sorted(extra_nodes)
+    arange = np.arange(len(schema_graph))
+    qmask = arange < len(qc_ids)
+    amask = (arange >= len(qc_ids)) & (arange < (len(qc_ids) + len(ac_ids)))
+    adj, concepts = concepts2adj(schema_graph)
+    return adj, concepts, qmask, amask
+
+#Gengyu
+def concepts_to_adj_matrices_pruned_path_ckb(data):
+
+    qc_ids, ac_ids, extra_nodes = data
+
+    qa_nodes = set(qc_ids) | set(ac_ids)
     extra_nodes = extra_nodes - qa_nodes
     schema_graph = sorted(qc_ids) + sorted(ac_ids) + sorted(extra_nodes)
     arange = np.arange(len(schema_graph))
@@ -257,7 +274,7 @@ def concepts_to_adj_matrices_3hop_qa_pair(data):
 #####################################################################################################
 
 #Gengyu
-def generate_graph_ckb(pruned_paths_path, kb, cpnet_graph_path, output_path):
+def generate_graph_ckb(keywords_path ,pruned_paths_path, kb, cpnet_graph_path, output_path):
     print(f'generating schema graphs for and {pruned_paths_path}...')
     if not os.path.isdir('/'.join(output_path.split('/')[:-1])):
         os.mkdir('/'.join(output_path.split('/')[:-1]))
@@ -273,14 +290,21 @@ def generate_graph_ckb(pruned_paths_path, kb, cpnet_graph_path, output_path):
     if cpnet is None or cpnet_simple is None:
         load_cpnet(cpnet_graph_path)
 
+    keywords_dict = pickle.load(open(keywords_path, 'rb'))
+
+
     with open(pruned_paths_path, 'r') as fin_pf, \
             open(output_path, 'w') as fout:
         fin_pf_lines = fin_pf.readlines()
+        idx = 0
         for line_pf in tqdm(fin_pf_lines, total=len(fin_pf_lines)):
             #mcp = json.loads(line_gr)
             qa_pairs = json.loads(line_pf)
 
-            mcp ={"qc":set(), "ac":set()}
+            #format keywords_dict[idx] = {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC":set() }
+            mcp ={"qc":keywords_dict[int(idx / 3)]['cq_word'], "ac": list(keywords_dict[int(idx / 3)].values())[idx % 3 + 1]}
+            idx += 1
+
             statement_paths = []
             statement_rel_list = []
             for qas in qa_pairs:
@@ -294,8 +318,8 @@ def generate_graph_ckb(pruned_paths_path, kb, cpnet_graph_path, output_path):
                 statement_paths.extend(cur_paths)
                 statement_rel_list.extend(cur_rels)
 
-                mcp["qc"].add(('conceptnet',qas['qc']))
-                mcp["ac"].add(('conceptnet',qas['ac']))
+                #mcp["qc"].add(('conceptnet',qas['qc']))
+                #mcp["ac"].add(('conceptnet',qas['ac']))
                 '''
                 try:
                     concept2id[('conceptnet',qas['qc'])]
@@ -306,8 +330,8 @@ def generate_graph_ckb(pruned_paths_path, kb, cpnet_graph_path, output_path):
                     for path in cur_paths:
                         print(kb.invert_kb_vocab[cur_paths[-1]])
                 '''
-            qcs = [concept2id[c] for c in mcp["qc"]]
-            acs = [concept2id[c] for c in mcp["ac"]]
+            qcs = [concept2id[('conceptnet', kb.lemmatize_word(c))] for c in mcp["qc"] if kb.lemmatize_word(c)]
+            acs = [concept2id[('conceptnet', kb.lemmatize_word(c))] for c in mcp["ac"] if kb.lemmatize_word(c)]
 
             gobj = plain_graph_generation(qcs=qcs, acs=acs,
                                           paths=statement_paths,
@@ -389,7 +413,82 @@ def generate_adj_matrices(ori_schema_graph_path, cpnet_graph_path, cpnet_vocab_p
     print()
 
 #Gengyu
-def generate_adj_data_from_grounded_concepts_ckb(pruned_paths_path, cpnet_graph_path, kb, output_path, num_processes):
+def generate_adj_data_from_pruned_paths_ckb(cpnet_graph_path, pruned_paths_path, kb, keywords_path, output_path, num_processes, n_path=None, max_node_num=None, seed=0):
+    """
+    This function will save
+        (1) adjacency matrics (each in the form of a (R*N, N) coo sparse matrix)
+        (2) concepts ids
+        (3) qmask that specifices whether a node is a question concept
+        (4) amask that specifices whether a node is a answer concept
+    to the output path in python pickle format
+
+    grounded_path: str
+    cpnet_graph_path: str
+    cpnet_vocab_path: str
+    output_path: str
+    num_processes: int
+    n_path: int
+    """
+    print(f'generating adj data for {pruned_paths_path} and keep top {n_path} for each keyword pair...')
+
+    global concept2id, id2concept, relation2id, id2relation, cpnet_simple, cpnet
+    if any(x is None for x in [concept2id, id2concept, relation2id, id2relation]):
+        #load_resources(cpnet_vocab_path)
+        concept2id = dict(kb.kb_vocab)
+        id2concept = dict(kb.invert_kb_vocab)
+        relation2id = dict(kb.relation2id)
+        id2relation = dict(kb.id2relation)
+        
+    if cpnet is None or cpnet_simple is None:
+        load_cpnet(cpnet_graph_path )
+
+    keywords_dict = pickle.load(open(keywords_path, 'rb'))
+    #format keywords_dict[idx] = {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC":set() }
+    qa_data = []
+    for value in keywords_dict:
+        for key, words in value.items():
+            if key.startswith("answer"):
+                mcp ={"qc":value['cq_word'], "ac": words}
+                q_ids = set(concept2id[c] for c in mcp["qc"])
+                a_ids = set(concept2id[c] for c in mcp["ac"])
+                q_ids = q_ids - a_ids
+                qa_data.append((q_ids, a_ids))
+    
+    pruned_path_file = open(pruned_paths_path,'r')
+    pruned_path_lines = pruned_path_file.readlines()
+    assert len(pruned_path_lines) == len(qa_data)
+
+    qa_path_data = []
+    for idx, line in tqdm(enumerate(pruned_path_lines), total=len(pruned_path_lines), desc='extract node id from pruned paths'): 
+        line_json = json.loads(line) 
+        this_qa_path_nodes = []
+        for keyword_pair in line_json:
+            for path in keyword_pair['pf_res'][:n_path]: #only use top n path
+                this_qa_path_nodes.extend(list(path['path'][1:])) #union
+        this_qa_path_nodes = set(this_qa_path_nodes)
+        if max_node_num and len(this_qa_path_nodes)>max_node_num: #randomly choose maximum n node
+            random.seed(seed)
+            this_qa_path_nodes = list(this_qa_path_nodes)
+            random.shuffle(this_qa_path_nodes)
+            this_qa_path_nodes = set(this_qa_path_nodes[:max_node_num])
+        qa_path_data.append((qa_data[idx][0], qa_data[idx][1], this_qa_path_nodes))
+
+    with Pool(num_processes) as p:
+        res = list(tqdm(p.imap(concepts_to_adj_matrices_pruned_path_ckb, qa_path_data), total=len(qa_data)))
+
+    # res is a list of tuples, each tuple consists of four elements (adj, concepts, qmask, amask)
+    if n_path: output_path=output_path+'.npath'+str(n_path)
+    if max_node_num: output_path=output_path+'.mxnode'+str(max_node_num)
+    with open(output_path, 'wb') as fout:
+        pickle.dump(res, fout)
+
+    print(f'adj data saved to {output_path}')
+    print()
+
+
+
+#Gengyu
+def generate_adj_data_from_grounded_concepts_ckb(cpnet_graph_path, kb, keywords_path, output_path, num_processes):
     """
     This function will save
         (1) adjacency matrics (each in the form of a (R*N, N) coo sparse matrix)
@@ -404,33 +503,32 @@ def generate_adj_data_from_grounded_concepts_ckb(pruned_paths_path, cpnet_graph_
     output_path: str
     num_processes: int
     """
-    print(f'generating adj data for {pruned_paths_path}...')
+    print(f'generating adj data for {keywords_path}...')
+    check_path(output_path)
 
     global concept2id, id2concept, relation2id, id2relation, cpnet_simple, cpnet
     if any(x is None for x in [concept2id, id2concept, relation2id, id2relation]):
         #load_resources(cpnet_vocab_path)
-        concept2id = kb.kb_vocab
-        id2concept = kb.invert_kb_vocab
-        relation2id = kb.relation2id
-        id2relation = kb.id2relation
+        concept2id = dict(kb.kb_vocab)
+        id2concept = dict(kb.invert_kb_vocab)
+        relation2id = dict(kb.relation2id)
+        id2relation = dict(kb.id2relation)
         
     if cpnet is None or cpnet_simple is None:
-        load_cpnet(cpnet_graph_path)
+        load_cpnet(cpnet_graph_path )
+
+    keywords_dict = pickle.load(open(keywords_path, 'rb'))
+    #format keywords_dict[idx] = {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC":set() }
 
     qa_data = []
-
-    with open(pruned_paths_path, 'r', encoding='utf-8') as fin_pf:
-        for line_pf in fin_pf:
-            qa_pairs = json.loads(line_pf)
-
-            mcp ={"qc":set(), "ac":set()}
-            for qas in qa_pairs:
-                mcp["qc"].add(('conceptnet',qas['qc']))
-                mcp["ac"].add(('conceptnet',qas['ac']))
-            q_ids = set(concept2id[c] for c in mcp['qc'])
-            a_ids = set(concept2id[c] for c in mcp['ac'])
-            q_ids = q_ids - a_ids
-            qa_data.append((q_ids, a_ids))
+    for value in keywords_dict:
+        for key, words in value.items():
+            if key.startswith("answer"):
+                mcp ={"qc":value['cq_word'], "ac": words}
+                q_ids = set(concept2id[c] for c in mcp["qc"])
+                a_ids = set(concept2id[c] for c in mcp["ac"])
+                q_ids = q_ids - a_ids
+                qa_data.append((q_ids, a_ids))
 
     with Pool(num_processes) as p:
         res = list(tqdm(p.imap(concepts_to_adj_matrices_2hop_all_pair, qa_data), total=len(qa_data)))

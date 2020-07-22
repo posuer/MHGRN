@@ -68,8 +68,8 @@ def load_pretrained_embeddings_ckb(glove_npy_path, glove_vocab_path, kb, verbose
     if not os.path.isdir('/'.join(save_path.split('/')[:-1])):
         os.mkdir('/'.join(save_path.split('/')[:-1]))
     vocab = []
-    for key in kb.only_word_dict:
-        vocab.append(key)
+    for key in kb.kb_vocab:
+        vocab.append(key[1])
     load_vectors_from_npy_with_vocab(glove_npy_path=glove_npy_path, glove_vocab_path=glove_vocab_path, vocab=vocab, verbose=verbose, save_path=save_path)
 
 

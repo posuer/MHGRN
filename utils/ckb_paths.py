@@ -8,14 +8,14 @@ import numpy as np
 from scipy.spatial import distance
 
 from utils.connected_kb import Connected_KB
+from utils.utils import check_path
 
-
-def get_embeddings(word_dict, vec_file, emb_size=300):
+def get_embeddings(word_dict=None, vec_file= None, emb_size=300):
     data_dir = "data/connected_kb/"
 
     if os.path.exists(os.path.join(data_dir, "glove.pickle")):
         word_vectors = pickle.load(open(os.path.join(data_dir, "glove.pickle"), 'rb'))
-    else:
+    elif vec_file:
         word_vectors = np.random.uniform(-0.1, 0.1, (len(word_dict), emb_size))	
         f = open(vec_file, 'r', encoding='utf-8')
         vec = {}
@@ -34,6 +34,47 @@ def get_embeddings(word_dict, vec_file, emb_size=300):
     return word_vectors
 
 
+
+def csqa_keywords_load(kb, input_file, output_file):
+    '''
+    #Output format:
+        {
+            id: {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC": set(), "all_ans_word": set()},
+            ...
+        }
+
+    '''
+    check_path(output_file)
+
+    with open(input_file, 'r', encoding='utf-8') as f:
+
+        lines = f.readlines()
+        all_keywords_dict = [dict() for _ in range(len(lines))]
+        for idx, line in enumerate(lines):
+            json_dic = json.loads(line)
+
+            answers_dict = {"answerA":json_dic["question"]["choices"][0]["text"], 
+                "answerB":json_dic["question"]["choices"][1]["text"],
+                "answerC":json_dic["question"]["choices"][2]["text"],
+                "answerD":json_dic["question"]["choices"][3]["text"],
+                "answerE":json_dic["question"]["choices"][4]["text"],
+                }
+            
+            all_keywords_dict[idx] = {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC":set(), "answerD":set(), "answerE":set() }
+
+            all_keywords_dict[idx]["cq_word"] = set(('conceptnet',word) for word in kb.get_keywords_from_text(json_dic["question"]["stem"]) if word in kb.only_word_dict)
+            for key, value in answers_dict.items():
+                all_keywords_dict[idx][key] = set(('conceptnet',word) for word in kb.get_keywords_from_text(value) if word in kb.only_word_dict)
+                if len(all_keywords_dict[idx]["cq_word"]) == 0 and len(all_keywords_dict[idx][key]) == 0:
+                    question_concept = json_dic["question"]["question_concept"].replace(" ", "_")
+                    all_keywords_dict[idx]["cq_word"] = {('conceptnet',question_concept)} if question_concept in kb.only_word_dict else set()
+                    if len(all_keywords_dict[idx]["cq_word"]) == 0:
+                        print("No keywords!", idx, all_keywords_dict)
+                        exit() 
+    pickle.dump(all_keywords_dict, open(output_file, 'wb'))
+
+    return all_keywords_dict
+
 def socialiqa_keywords_load(kb, filename):
     '''
     #Output format:
@@ -49,9 +90,9 @@ def socialiqa_keywords_load(kb, filename):
         all_keywords_dict = pickle.load(open(os.path.join(data_dir, "socialIQa_v1.4_"+filename+"_keywords.pickle"), 'rb'))
     else:
         filepath = os.path.join(data_dir, "socialIQa_v1.4_"+filename+".jsonl")
-        all_keywords_dict = {}
         with open(filepath, 'r', encoding='utf-8') as f:
             lines = f.readlines()
+            all_keywords_dict = [dict() for _ in range(len(lines))]
             
             for idx, line in enumerate(lines):
                 path_result = []
@@ -63,11 +104,11 @@ def socialiqa_keywords_load(kb, filename):
                 
                 all_keywords_dict[idx] = {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC":set() }
 
-                all_keywords_dict[idx]["cq_word"] = kb.get_keywords_from_text(context+' '+question)
+                all_keywords_dict[idx]["cq_word"] = set(('conceptnet',word) for word in kb.get_keywords_from_text(context+' '+question) if word in kb.only_word_dict)
                 all_keywords_dict[idx]["all_ans_word"] = kb.get_keywords_from_text(' '.join(answers_dict.values())) #found paths were not splited for each answer
                 
                 for key, value in answers_dict.items():
-                    all_keywords_dict[idx][key] = kb.get_keywords_from_text(value)
+                    all_keywords_dict[idx][key] = set(('conceptnet',word) for word in kb.get_keywords_from_text(value) if word in kb.only_word_dict)
                 
         pickle.dump(all_keywords_dict, open(os.path.join(data_dir, "socialIQa_v1.4_"+filename+"_keywords.pickle"), 'wb'))
     
@@ -137,11 +178,16 @@ def merge_path(input_paras):
                     node_list = []
                     #print("Skip this path due to invalid relation:", hop['rel_w_parent'] )
                     break
+                grouped_rel = kb.rel_grouping[hop['rel_w_parent']]
+                this_hop_dir = hop['rel_direction']
+                if grouped_rel.startswith('*'): # if start with #, reverse the dirction eg:('causes': 'causes', 'motivatedbygoal': '*causes',)
+                    this_hop_dir = 0 if this_hop_dir else 1
+                    grouped_rel = grouped_rel[1:]
+                if this_hop_dir == 1:#if opposite direction, get opposite id by adding length of all relations
+                    rel_list.append([kb.relation2id[grouped_rel] + len(kb.relation2id)])
+                else: 
+                    rel_list.append([kb.relation2id[grouped_rel]])
 
-                if hop['rel_direction'] == 0:
-                    rel_list.append([kb.relation2id[kb.rel_grouping[hop['rel_w_parent']]]])
-                else: #if opposite direction, get opposite id by adding length of all relations
-                    rel_list.append([kb.relation2id[kb.rel_grouping[hop['rel_w_parent']]] + len(kb.relation2id)])
             
             if node_list in merged_path_list_nodes:
                 idx = merged_path_list_nodes.index(node_list)
@@ -159,8 +205,21 @@ def merge_path(input_paras):
     return pruned_path
 
 
+        with multiprocessing.Pool(cores) as p:
+            for pruned_path in tqdm(p.imap(merge_path, multi_process_input), total=len(multi_process_input)):
+                if pruned_path:
+                    writer_dict[trn_dev_tst].write(json.dumps(pruned_path) + '\n')
+                else:
+                    writer_dict[trn_dev_tst].write('[]\n')
+        #'''
+        print(file_split_name, "pruned paths saved")
+        
+    if writer_trn: writer_trn.close()
+    if writer_dev: writer_dev.close()
+    if writer_tst: writer_tst.close()
+        
+
 def prune_path(kb, vec_file, top_k = 100, emb_size=300):
-    #TODO relation id mapping method need to be changed during run
     '''
     file input: {idx: {'answerA':[{"cq_word":cq_word, "a_word":a_word, "paths":paths}], 
         'answerB':list(), 'answerC':list()}
@@ -190,6 +249,7 @@ def prune_path(kb, vec_file, top_k = 100, emb_size=300):
 
     file_list = os.listdir(data_dir)
     file_list.sort()
+    file_list = file_list
     #print(file_list)
     for file_split_name in file_list:
         print(file_split_name, "pruned paths start...")
@@ -268,8 +328,20 @@ if __name__ == "__main__":
     #from connected_kb import Connected_KB
     print("Loading KB ...")
     kb = Connected_KB()
-    filename = sys.argv[1]
+
+    socialiqa_keywords_load(kb, 'tst')
+    socialiqa_keywords_load(kb, 'dev')
+    socialiqa_keywords_load(kb, 'trn')
+
     #print("Start searching for", filename)
     #path_retrieve(kb, filename)
-    glove_path = "/mnt/cephfs2/nlp/gengyu.wang/MHGRN/data/glove/glove.6B.300d.txt"
-    prune_path(kb, glove_path)
+    
+
+    # print("processing:", 'tst')
+    # socialiqa_keywords_ground(kb, 'tst')
+    # print("processing:", 'dev')
+    # socialiqa_keywords_ground(kb, 'dev')
+    # print("processing:", 'trn')
+    # socialiqa_keywords_ground(kb, 'trn')
+
+

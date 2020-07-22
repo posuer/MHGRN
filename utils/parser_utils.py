@@ -45,12 +45,13 @@ EMB_PATHS = {
     'lm': './data/transe/glove.transe.sgd.ent.npy',
     'numberbatch': './data/transe/concept.nb.npy',
     'tzw': './data/cpnet/tzw.ent.npy',
+    'numberbatch_ckb': './data/connected_kb/transe/concept.nb.npy',
 }
 
 
 def add_data_arguments(parser):
     # arguments that all datasets share
-    parser.add_argument('--ent_emb', default=['tzw'], choices=['transe', 'numberbatch', 'lm', 'tzw'], nargs='+', help='sources for entity embeddings')
+    parser.add_argument('--ent_emb', default=['tzw'], choices=['transe', 'numberbatch','numberbatch_ckb', 'lm', 'tzw'], nargs='+', help='sources for entity embeddings')
     parser.add_argument('--ent_emb_paths', default=['./data/transe/glove.transe.sgd.ent.npy'], nargs='+', help='paths to entity embedding file(s)')
     parser.add_argument('--rel_emb_path', default='./data/transe/glove.transe.sgd.rel.npy', help='paths to relation embedding file')
     # dataset specific
