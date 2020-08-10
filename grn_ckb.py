@@ -49,6 +49,9 @@ def main():
     parser.add_argument('--dev_embs', default=f'./data/connected_kb/{args.dataset}/features/dev.roberta.layer-1.3hop.pk')
     parser.add_argument('--test_embs', default=f'./data/connected_kb/{args.dataset}/features/test.roberta.layer-1.3hop.pk')
     parser.add_argument('--path_hop', default='2hop', choices=['2hop', '3hop'])
+    parser.add_argument('--pruned', type=bool, default=False)
+    parser.add_argument('--Q2Rel', type=bool, default=False)
+
 
 
     # model architecture
@@ -93,14 +96,18 @@ def main():
     parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='show this help message and exit')
     args = parser.parse_args()
     
-    adj_graph_file = ".pruned.pk.npath20" if args.path_hop == "3hop" else ".pk"
+    pruned = ".pruned.pk" if args.pruned else ""
+    #adj_graph_file = ".pk.npath20" if args.path_hop == "3hop" else ".pk"
+    adj_graph_file=""
     mxnode_file = ".mxnode"+str(args.max_node_num) if args.max_node_num==300 else ""
+    Q2Rel = ".Q2Rel" if args.Q2Rel else ""
+
     parser.set_defaults(train_embs=f'./data/connected_kb/{args.dataset}/features/train.roberta.layer-1.{args.path_hop}.pk',
                         dev_embs=f'./data/connected_kb/{args.dataset}/features/dev.roberta.layer-1.{args.path_hop}.pk',
                         test_embs=f'./data/connected_kb/{args.dataset}/features/test.roberta.layer-1.{args.path_hop}.pk',
-                        train_adj=f'./data/connected_kb/{args.dataset}/graph/train.graph.adj{adj_graph_file}{mxnode_file}',
-                        dev_adj=f'./data/connected_kb/{args.dataset}/graph/dev.graph.adj{adj_graph_file}{mxnode_file}',
-                        test_adj=f'./data/connected_kb/{args.dataset}/graph/test.graph.adj{adj_graph_file}{mxnode_file}',
+                        train_adj=f'./data/connected_kb/{args.dataset}/graph/train.graph.adj{pruned}{adj_graph_file}{mxnode_file}{Q2Rel}',
+                        dev_adj=f'./data/connected_kb/{args.dataset}/graph/dev.graph.adj{pruned}{adj_graph_file}{mxnode_file}{Q2Rel}',
+                        test_adj=f'./data/connected_kb/{args.dataset}/graph/test.graph.adj{pruned}{adj_graph_file}{mxnode_file}{Q2Rel}',
                         )
 
     if args.simple:

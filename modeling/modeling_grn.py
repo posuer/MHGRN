@@ -738,7 +738,7 @@ class LMGraphRelationNetDataLoader(object):
         if test_statement_path is not None:
             self.test_qids, self.test_labels, *self.test_encoder_data = load_input_tensors(test_statement_path, model_type, model_name, max_seq_length, format=format)
             *self.test_decoder_data, self.test_adj_data, n_rel = load_adj_data(test_adj_path, max_node_num, num_choice, emb_pk_path=test_embs_path if use_contextualized else None)
-            assert all(len(self.test_qids) == len(self.test_adj_data) == x.size(0) for x in [self.test_labels] + self.test_encoder_data + self.test_decoder_data)
+            assert all(len(self.test_qids) == len(self.test_adj_data) == len(x) for x in [self.test_labels] + self.test_encoder_data + self.test_decoder_data) #.size(0)
 
         if self.is_inhouse:
             with open(inhouse_train_qids_path, 'r') as fin:

@@ -413,7 +413,7 @@ def generate_adj_matrices(ori_schema_graph_path, cpnet_graph_path, cpnet_vocab_p
     print()
 
 #Gengyu
-def generate_adj_data_from_pruned_paths_ckb(cpnet_graph_path, pruned_paths_path, kb, keywords_path, output_path, num_processes, n_path=None, max_node_num=None, seed=0):
+def generate_adj_data_from_pruned_paths_ckb(cpnet_graph_path, pruned_paths_path, kb, keywords_path, output_path, num_processes, n_path=None, max_node_num=None, Q2Rel=False, seed=0):
     """
     This function will save
         (1) adjacency matrics (each in the form of a (R*N, N) coo sparse matrix)
@@ -479,6 +479,7 @@ def generate_adj_data_from_pruned_paths_ckb(cpnet_graph_path, pruned_paths_path,
     # res is a list of tuples, each tuple consists of four elements (adj, concepts, qmask, amask)
     if n_path: output_path=output_path+'.npath'+str(n_path)
     if max_node_num: output_path=output_path+'.mxnode'+str(max_node_num)
+    if Q2Rel: output_path=output_path+".Q2Rel"
     with open(output_path, 'wb') as fout:
         pickle.dump(res, fout)
 

@@ -34,6 +34,145 @@ def get_embeddings(word_dict=None, vec_file= None, emb_size=300):
     return word_vectors
 
 
+def ground_multi_process(line):
+    word_embeddings = get_embeddings()
+
+    item = json.loads(line.strip())
+
+    context = item["context"]
+    question = item["question"]
+    answers_dict = {"answerA":item["answerA"], "answerB":item["answerB"],"answerC":item["answerC"]}
+    
+    all_keywords_dict = {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC":set() }
+
+    cq_words = kb.get_keywords_from_text(context+' '+question)
+    for word in cq_words:
+        if word in kb.ConceptNet:
+            all_keywords_dict["cq_word"].add(('conceptnet',word))
+        
+        # for kb_type, kb_sub in kb.ConceptNet[word].items():
+        #     if kb_type in ['atomic_event', 'atomic_infer']:
+        #         for kb_key in kb_sub:
+        #             all_keywords_dict[idx]["cq_word"].add((kb_type, kb_key))
+
+    #all_keywords_dict[idx]["all_ans_word"] = kb.get_keywords_from_text(' '.join(answers_dict.values())) #found paths were not splited for each answer
+    qa_keywords = all_keywords_dict["cq_word"]
+    #print(qa_keywords)
+    qa_average_embedding = np.average([word_embeddings[kb.only_word_dict[word]] for word in qa_keywords if word in kb.only_word_dict ], axis=0)
+
+
+    for key, value in answers_dict.items():
+        a_words = kb.get_keywords_from_text(value)
+        atomic_list = set()
+        for word in a_words:
+            if word in kb.ConceptNet:
+                all_keywords_dict[key].add(('conceptnet',word)) #add Concept Net
+                for kb_type, kb_sub in kb.ConceptNet[word].items():
+                    if kb_type in ['atomic_event', 'atomic_infer']:
+                        for kb_key in kb_sub:
+                            atomic_list.add((kb_type, kb_key))
+        similarity_score_list = []
+        atomic_list = list(atomic_list)
+        for kb_type, kb_key in atomic_list:
+            path_keywords_list = []
+            if kb_type == 'atomic_event':
+                path_keywords_list.extend(list(kb.ATOMIC_Events[kb_key]["conceptnet"]))
+            if kb_type == 'atomic_infer':
+                path_keywords_list.extend(list(kb.ATOMIC_Infers[kb_key]["conceptnet"]))
+            path_average_embedding = np.average([word_embeddings[kb.only_word_dict[kw]] for kw in path_keywords_list if kw in kb.only_word_dict ], axis=0)
+
+            similarity_score_list.append(distance.cosine(qa_average_embedding, path_average_embedding))
+        top_k_paths = []
+        for count, index in enumerate(np.argsort(np.array(similarity_score_list))[::-1]):
+            if count == 3: break
+            top_k_paths.append(atomic_list[index])
+        
+        all_keywords_dict[key].update(top_k_paths) # add ranked top n ATOMIC
+    return all_keywords_dict
+
+def socialiqa_keywords_ground(kb, filename):
+    '''
+    #Output format:
+        {
+            id: {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC": set(), "all_ans_word": set()},
+            ...
+        }
+
+    '''
+    data_dir = "data/connected_kb/socialiqa/"
+
+    if os.path.exists(os.path.join(data_dir, "socialIQa_v1.4_"+filename+"_ground_keywords.pickle")):
+        all_keywords_dict = pickle.load(open(os.path.join(data_dir, "socialIQa_v1.4_"+filename+"_ground_keywords.pickle"), 'rb'))
+    else:
+        #word_embeddings = get_embeddings(kb.only_word_dict)
+        cores = multiprocessing.cpu_count()
+        print("Runing on", cores, "CPUs.")
+        filepath = os.path.join(data_dir, "socialIQa_v1.4_"+filename+".jsonl")
+        all_keywords_dict = []
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            with multiprocessing.Pool(cores) as p:
+                for grounded_keys_qa in tqdm(p.imap(ground_multi_process, lines), total=len(lines)):
+                    all_keywords_dict.append(grounded_keys_qa)
+            '''
+            for idx, line in tqdm(enumerate(lines), total=len(lines)):
+
+                item = json.loads(line.strip())
+
+                context = item["context"]
+                question = item["question"]
+                answers_dict = {"answerA":item["answerA"], "answerB":item["answerB"],"answerC":item["answerC"]}
+                
+                all_keywords_dict[idx] = {"cq_word":set(), "answerA":set(), "answerB":set(), "answerC":set() }
+
+                cq_words = kb.get_keywords_from_text(context+' '+question)
+                for word in cq_words:
+                    if word in kb.ConceptNet:
+                        all_keywords_dict[idx]["cq_word"].add(('conceptnet',word))
+                    
+                    # for kb_type, kb_sub in kb.ConceptNet[word].items():
+                    #     if kb_type in ['atomic_event', 'atomic_infer']:
+                    #         for kb_key in kb_sub:
+                    #             all_keywords_dict[idx]["cq_word"].add((kb_type, kb_key))
+
+                #all_keywords_dict[idx]["all_ans_word"] = kb.get_keywords_from_text(' '.join(answers_dict.values())) #found paths were not splited for each answer
+                qa_keywords = all_keywords_dict[idx]["cq_word"]
+                #print(qa_keywords)
+                qa_average_embedding = np.average([word_embeddings[kb.only_word_dict[word]] for word in qa_keywords if word in kb.only_word_dict ], axis=0)
+
+
+                for key, value in answers_dict.items():
+                    a_words = kb.get_keywords_from_text(value)
+                    atomic_list = set()
+                    for word in a_words:
+                        if word in kb.ConceptNet:
+                            all_keywords_dict[idx][key].add(('conceptnet',word)) #add Concept Net
+                            for kb_type, kb_sub in kb.ConceptNet[word].items():
+                                if kb_type in ['atomic_event', 'atomic_infer']:
+                                    for kb_key in kb_sub:
+                                        atomic_list.add((kb_type, kb_key))
+                    similarity_score_list = []
+                    atomic_list = list(atomic_list)
+                    for kb_type, kb_key in atomic_list:
+                        path_keywords_list = []
+                        if kb_type == 'atomic_event':
+                            path_keywords_list.extend(list(kb.ATOMIC_Events[kb_key]["conceptnet"]))
+                        if kb_type == 'atomic_infer':
+                            path_keywords_list.extend(list(kb.ATOMIC_Infers[kb_key]["conceptnet"]))
+                        path_average_embedding = np.average([word_embeddings[kb.only_word_dict[kw]] for kw in path_keywords_list if kw in kb.only_word_dict ], axis=0)
+        
+                        similarity_score_list.append(distance.cosine(qa_average_embedding, path_average_embedding))
+                    top_k_paths = []
+                    for count, index in enumerate(np.argsort(np.array(similarity_score_list))[::-1]):
+                        if count == 3: break
+                        top_k_paths.append(atomic_list[index])
+                    
+                    all_keywords_dict[idx][key].update(top_k_paths) # add ranked top n ATOMIC
+            '''
+        pickle.dump(all_keywords_dict, open(os.path.join(data_dir, "socialIQa_v1.4_"+filename+"_ground_keywords.pickle"), 'wb'))
+    
+    return all_keywords_dict
+
 
 def csqa_keywords_load(kb, input_file, output_file):
     '''

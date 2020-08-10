@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 import torch
 from transformers import (OpenAIGPTTokenizer, BertTokenizer, XLNetTokenizer, RobertaTokenizer,)#gengyu-  AlbertTokenizer)
+import logging
 
 from utils.tokenization_utils import *
 
@@ -129,7 +130,7 @@ class MultiGPUAdjDataBatchGenerator(object):
     tensors1, lists1, adj, labels  are on device1
     """
 
-    def __init__(self, device0, device1, batch_size, indexes, qids, labels,
+    def __init__(self, device0, device1, batch_size, indexes, qids, labels, max_node_num=200,#Gengyu
                  tensors0=[], lists0=[], tensors1=[], lists1=[], adj_empty=None, adj_data=None):
         self.device0 = device0
         self.device1 = device1
@@ -143,6 +144,7 @@ class MultiGPUAdjDataBatchGenerator(object):
         self.lists1 = lists1
         self.adj_empty = adj_empty.to(self.device1)
         self.adj_data = adj_data
+        self.max_node_num = max_node_num #gengyu
 
     def __len__(self):
         return (self.indexes.size(0) - 1) // self.batch_size + 1
@@ -158,7 +160,18 @@ class MultiGPUAdjDataBatchGenerator(object):
             batch_qids = [self.qids[idx] for idx in batch_indexes]
             batch_labels = self._to_device(self.labels[batch_indexes], self.device1)
             batch_tensors0 = [self._to_device(x[batch_indexes], self.device0) for x in self.tensors0]
-            batch_tensors1 = [self._to_device(x[batch_indexes], self.device1) for x in self.tensors1]
+            #Gengyu: padding num_concept of LM node feature data
+            batch_tensors1 = [self._to_device(x[batch_indexes], self.device1) for x in self.tensors1[:3]] #only first three data
+            if len(self.tensors1) == 4: #there is node feature data
+                emb_data = self.tensors1[3]
+                num_choice = len(emb_data[0])
+                emb_padded = torch.zeros((len(batch_indexes), num_choice, self.max_node_num, emb_data[0][0].size(-1)), dtype=torch.float)
+                for idx, index in enumerate(batch_indexes.tolist()):
+                    for choice_id in range(num_choice):
+                        num_concept = min(len(emb_data[index][choice_id]), self.max_node_num)   
+                        emb_padded[idx, choice_id, :num_concept] = emb_data[index][choice_id][:num_concept]
+                batch_tensors1.append(self._to_device(emb_padded, self.device1))
+
             batch_lists0 = [self._to_device([x[i] for i in batch_indexes], self.device0) for x in self.lists0]
             batch_lists1 = [self._to_device([x[i] for i in batch_indexes], self.device1) for x in self.lists1]
 
@@ -385,10 +398,30 @@ def load_adj_data(adj_pk_path, max_node_num, num_choice, emb_pk_path=None):
     node_type_ids = torch.full((n_samples, max_node_num), 2, dtype=torch.long)
 
     if emb_pk_path is not None:
-        with open(emb_pk_path, 'rb') as fin:
-            all_embs = pickle.load(fin)
-        emb_data = torch.zeros((n_samples, max_node_num, all_embs[0].shape[1]), dtype=torch.float)
+        if os.path.basename(emb_pk_path).startswith('train') and os.path.isfile(emb_pk_path+"00"): #Gengyu
+            all_embs_flat = []
+            for split in range(11):
+                emb_pk_path_split = emb_pk_path + str(split).zfill(2)#extend 1 to 01, 2 to 02
+                logging.info(f"Loading {emb_pk_path_split}")
+                with open(emb_pk_path_split, 'rb') as fin:
+                    all_embs_flat.extend(pickle.load(fin))
+            #Load offsets
+            train_input_pk_filename = os.path.basename(emb_pk_path).split(".")
+            train_input_pk_filename[2] = "inputs"
+            train_input_pk_filename = '.'.join(train_input_pk_filename)
+            train_input_pk_path = os.path.dirname(emb_pk_path)+"/"+ train_input_pk_filename
+            with open(train_input_pk_path, 'rb') as fin:
+                _, _, _, _, offsets = pickle.load(fin)
 
+            #merge multiple concepts for a QA pair
+            all_embs = [np.array(all_embs_flat[offsets[i]:offsets[i + 1]]) for i in range(len(offsets) - 1)]
+            del offsets
+            del all_embs_flat
+        else:
+            with open(emb_pk_path, 'rb') as fin:
+                all_embs = pickle.load(fin)
+        #emb_data = torch.zeros((n_samples, max_node_num, all_embs[0].shape[1]), dtype=torch.float)
+        emb_data = []
     adj_lengths_ori = adj_lengths.clone()
     for idx, (adj, concepts, qm, am) in tqdm(enumerate(adj_concept_pairs), total=n_samples, desc='loading adj matrices'):
         num_concept = min(len(concepts), max_node_num)
@@ -396,7 +429,8 @@ def load_adj_data(adj_pk_path, max_node_num, num_choice, emb_pk_path=None):
         if emb_pk_path is not None:
             embs = all_embs[idx]
             assert embs.shape[0] >= num_concept
-            emb_data[idx, :num_concept] = torch.tensor(embs[:num_concept])
+            #emb_data[idx, :num_concept] = torch.tensor(embs[:num_concept])
+            emb_data.append(torch.tensor(embs[:num_concept]))#Gengyu 
             concepts = np.arange(num_concept)
         else:
             concepts = concepts[:num_concept]
@@ -421,13 +455,23 @@ def load_adj_data(adj_pk_path, max_node_num, num_choice, emb_pk_path=None):
                                                       (node_type_ids == 1).float().sum(1).mean().item()))
 
     concept_ids, node_type_ids, adj_lengths = [x.view(-1, num_choice, *x.size()[1:]) for x in (concept_ids, node_type_ids, adj_lengths)]
-    if emb_pk_path is not None:
-        emb_data = emb_data.view(-1, num_choice, *emb_data.size()[1:])
+    if emb_pk_path is not None: #combine three option together
+        #emb_data = emb_data.view(-1, num_choice, *emb_data.size()[1:])
+        del all_embs
+        combined_emb_data = [] #Gengyu
+        emb_data_QA = []
+        for idx, emb_data_option in enumerate(emb_data):
+            if idx % num_choice == 0 and emb_data_QA: # QA example
+                combined_emb_data.append(emb_data_QA)
+                emb_data_QA = []
+            emb_data_QA.append(emb_data_option)
+        combined_emb_data.append(emb_data_QA)
+        #combined_emb_data shape: num_QA_example, num_choice, tensor(num_concepts, dim_node_feature)
     adj_data = list(map(list, zip(*(iter(adj_data),) * num_choice)))
 
     if emb_pk_path is None:
         return concept_ids, node_type_ids, adj_lengths, adj_data, half_n_rel * 2 + 1
-    return concept_ids, node_type_ids, adj_lengths, emb_data, adj_data, half_n_rel * 2 + 1
+    return concept_ids, node_type_ids, adj_lengths, combined_emb_data, adj_data, half_n_rel * 2 + 1
 
 
 def load_gpt_input_tensors(statement_jsonl_path, max_seq_length):

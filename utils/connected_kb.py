@@ -5,6 +5,7 @@ import nltk
 import networkx as nx
 from tqdm import tqdm
 from nltk.stem import WordNetLemmatizer 
+import re
 
 # from utils.conceptnet import load_merge_relation, merged_relations
 
@@ -84,6 +85,7 @@ class Connected_KB(object):
 
         self.rel_grouping = self.__relation_grouping() 
         self.relation2id, self.id2relation = self.__relation_id_map()
+        self.atomic_rel_types = ["oEffect","oReact","oWant","xAttr","xEffect","xIntent","xNeed","xReact","xWant"]
 
         self.lemmatizer = WordNetLemmatizer() 
         '''
@@ -98,6 +100,31 @@ class Connected_KB(object):
         self.kb_load()
         self.vocab_load()
         self.only_word_dict = dict([(key[1],value) for key, value in self.kb_vocab.items() if key[0]=='conceptnet'])
+    
+    #def tokenize(self, data):
+    #    return [x.strip().lower() for x in re.split('(\W+)', data) if x.strip()]
+
+    def get_full_word_vocab(self):
+        # return vocab for path ranking
+        # full vocab for words in connected KB, including words in ConceptNet and ATOMIC Event and Infers
+        word_dict = {}
+        word_dict['PAD'] = len(word_dict)
+        word_dict['UNK'] = len(word_dict)
+
+        for key in self.ConceptNet:
+            for word in key.lower().split("_"):
+                if word not in word_dict:
+                    word_dict[word] = len(word_dict)
+        for key in self.ATOMIC_Events:
+            for word in nltk.word_tokenize(key.lower()):
+                if word not in word_dict:
+                    word_dict[word] = len(word_dict)
+        for key in self.ATOMIC_Infers:
+            for word in nltk.word_tokenize(key.lower()):
+                if word not in word_dict:
+                    word_dict[word] = len(word_dict)
+
+        return word_dict
 
     def __relation_grouping(self, ):
         rel_grouping = load_merge_relation() #conceptnet, * means opposite relation direction 
@@ -171,7 +198,7 @@ class Connected_KB(object):
         keywords_lem = [self.lemmatizer.lemmatize(word) for word in keywords] 
         return keywords_lem
 
-    def get_keywords_from_text(self, text): #for QA text
+    def get_keywords_from_text(self, text): #for QA text and path retrieving
         stopwords = ['get', "n't",'ourselves', 'hers', 'between', 'yourself', 'but', 'again', 'there', 'about', 'once', 'during', 'out', 'very', 'having', 'with', 'they', 'own', 'an', 'be', 'some', 'for', 'do', 'its', 'yours', 'such', 'into', 'of', 'most', 'itself', 'other', 'off', 'is', 's', 'am', 'or', 'who', 'as', 'from', 'him', 'each', 'the', 'themselves', 'until', 'below', 'are', 'we', 'these', 'your', 'his', 'through', 'don', 'nor', 'me', 'were', 'her', 'more', 'himself', 'this', 'down', 'should', 'our', 'their', 'while', 'above', 'both', 'up', 'to', 'ours', 'had', 'she', 'all', 'no', 'when', 'at', 'any', 'before', 'them', 'same', 'and', 'been', 'have', 'in', 'will', 'on', 'does', 'yourselves', 'then', 'that', 'because', 'what', 'over', 'why', 'so', 'can', 'did', 'not', 'now', 'under', 'he', 'you', 'herself', 'has', 'just', 'where', 'too', 'only', 'myself', 'which', 'those', 'i', 'after', 'few', 'whom', 't', 'being', 'if', 'theirs', 'my', 'against', 'a', 'by', 'doing', 'it', 'how', 'further', 'was', 'here', 'than']
         keywords = [word for (word, pos) in nltk.pos_tag(nltk.word_tokenize(text.lower())) if pos[:2] in ['NN', 'JJ', 'VB', "RB"] and word not in stopwords ]
         keywords_lem = set([self.lemmatizer.lemmatize(word) for word in keywords])
